@@ -1,58 +1,63 @@
 import requests
-import pandas as pd
-from typing import List, Dict
+import csv
 
-PUBMED_API_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
-DETAILS_API_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
+BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+DETAILS_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
 
-def fetch_papers(query: str, max_results: int = 10) -> List[Dict]:
-    """Fetch papers from PubMed based on a query."""
+def fetch_and_filter_papers(query, max_results=10):
+    """Fetch papers from PubMed using the query."""
     params = {
         "db": "pubmed",
         "term": query,
-        "retmode": "json",
-        "retmax": max_results
-    }
-    
-    response = requests.get(PUBMED_API_URL, params=params)
-    if response.status_code != 200:
-        raise Exception("Failed to fetch results from PubMed.")
-    
-    data = response.json()
-    pubmed_ids = data["esearchresult"]["idlist"]
-    
-    return fetch_details(pubmed_ids)
-
-def fetch_details(pubmed_ids: List[str]) -> List[Dict]:
-    """Fetch detailed information about papers using PubMed IDs."""
-    params = {
-        "db": "pubmed",
-        "id": ",".join(pubmed_ids),
+        "retmax": max_results,
         "retmode": "json"
     }
+    response = requests.get(BASE_URL, params=params)
     
-    response = requests.get(DETAILS_API_URL, params=params)
     if response.status_code != 200:
-        raise Exception("Failed to fetch paper details.")
-    
-    data = response.json()
+        raise Exception(f"Failed to fetch data: {response.status_code}")
+
+    paper_ids = response.json().get("esearchresult", {}).get("idlist", [])
+    if not paper_ids:
+        print("No results found.")
+        return []
+
+    # Fetch paper details
+    details_params = {
+        "db": "pubmed",
+        "id": ",".join(paper_ids),
+        "retmode": "json"
+    }
+    details_response = requests.get(DETAILS_URL, params=details_params)
+
+    if details_response.status_code != 200:
+        raise Exception(f"Failed to fetch details: {details_response.status_code}")
+
+    details = details_response.json().get("result", {})
+
     papers = []
-    
-    for pid in pubmed_ids:
-        if pid in data["result"]:
-            details = data["result"][pid]
-            papers.append({
-                "PubmedID": pid,
-                "Title": details.get("title", "N/A"),
-                "Publication Date": details.get("pubdate", "N/A"),
-                "Authors": [author.get("name", "Unknown") for author in details.get("authors", [])],
-                "Company Affiliations": "Unknown",  # Need heuristic to detect
-                "Corresponding Author Email": "Unknown"  # Need heuristic to detect
-            })
-    
+    for paper_id in paper_ids:
+        paper_info = details.get(paper_id, {})
+        papers.append({
+            "PubmedID": paper_id,
+            "Title": paper_info.get("title", "Unknown Title"),
+            "Publication Date": paper_info.get("pubdate", "Unknown Date"),
+            "Authors": paper_info.get("authors", []),
+            "Company Affiliations": paper_info.get("source", "Unknown"),
+            "Corresponding Author Email": "Unknown"  # Placeholder
+        })
+
     return papers
 
-def save_to_csv(papers: List[Dict], filename: str = "papers.csv"):
-    """Save fetched papers to a CSV file."""
-    df = pd.DataFrame(papers)
-    df.to_csv(filename, index=False)
+def save_to_csv(papers, filename):
+    """Save papers to a CSV file."""
+    if not papers:
+        print("No data to save.")
+        return
+    
+    with open(filename, "w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=papers[0].keys())
+        writer.writeheader()
+        writer.writerows(papers)
+    
+    print(f"Results saved to {filename}")
